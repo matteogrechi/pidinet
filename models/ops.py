@@ -45,53 +45,56 @@ class Conv2d(nn.Module):
 
 
 ## cd, ad, rd convolutions
+def _cpdc(x, weights, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    assert dilation in [1, 2], 'dilation for cd_conv should be in 1 or 2'
+    assert weights.size(2) == 3 and weights.size(3) == 3, 'kernel size for cd_conv should be 3x3'
+    assert padding == dilation, 'padding for cd_conv set wrong'
+
+    weights_c = weights.sum(dim=[2, 3], keepdim=True)
+    yc = F.conv2d(x, weights_c, stride=stride, padding=0, groups=groups)
+    y = F.conv2d(x, weights, bias, stride=stride, padding=padding, dilation=dilation, groups=groups)
+    return y - yc
+
+def _apdc(x, weights, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    assert dilation in [1, 2], 'dilation for ad_conv should be in 1 or 2'
+    assert weights.size(2) == 3 and weights.size(3) == 3, 'kernel size for ad_conv should be 3x3'
+    assert padding == dilation, 'padding for ad_conv set wrong'
+
+    shape = weights.shape
+    weights = weights.view(shape[0], shape[1], -1)
+    weights_conv = (weights - weights[:, :, [3, 0, 1, 6, 4, 2, 7, 8, 5]]).view(shape) # clock-wise
+    y = F.conv2d(x, weights_conv, bias, stride=stride, padding=padding, dilation=dilation, groups=groups)
+    return y
+
+def _rpdc(x, weights, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    assert dilation in [1, 2], 'dilation for rd_conv should be in 1 or 2'
+    assert weights.size(2) == 3 and weights.size(3) == 3, 'kernel size for rd_conv should be 3x3'
+    padding = 2 * dilation
+
+    shape = weights.shape
+    if weights.is_cuda:
+        buffer = torch.cuda.FloatTensor(shape[0], shape[1], 5 * 5).fill_(0)
+    else:
+        buffer = torch.zeros(shape[0], shape[1], 5 * 5)
+    weights = weights.view(shape[0], shape[1], -1)
+    buffer[:, :, [0, 2, 4, 10, 14, 20, 22, 24]] = weights[:, :, 1:]
+    buffer[:, :, [6, 7, 8, 11, 13, 16, 17, 18]] = -weights[:, :, 1:]
+    buffer[:, :, 12] = 0
+    buffer = buffer.view(shape[0], shape[1], 5, 5)
+    y = F.conv2d(x, buffer, bias, stride=stride, padding=padding, dilation=dilation, groups=groups)
+    return y
+
 def createConvFunc(op_type):
     assert op_type in ['cv', 'cd', 'ad', 'rd'], 'unknown op type: %s' % str(op_type)
     if op_type == 'cv':
         return F.conv2d
 
     if op_type == 'cd':
-        def func(x, weights, bias=None, stride=1, padding=0, dilation=1, groups=1):
-            assert dilation in [1, 2], 'dilation for cd_conv should be in 1 or 2'
-            assert weights.size(2) == 3 and weights.size(3) == 3, 'kernel size for cd_conv should be 3x3'
-            assert padding == dilation, 'padding for cd_conv set wrong'
-
-            weights_c = weights.sum(dim=[2, 3], keepdim=True)
-            yc = F.conv2d(x, weights_c, stride=stride, padding=0, groups=groups)
-            y = F.conv2d(x, weights, bias, stride=stride, padding=padding, dilation=dilation, groups=groups)
-            return y - yc
-        return func
+        return _cpdc
     elif op_type == 'ad':
-        def func(x, weights, bias=None, stride=1, padding=0, dilation=1, groups=1):
-            assert dilation in [1, 2], 'dilation for ad_conv should be in 1 or 2'
-            assert weights.size(2) == 3 and weights.size(3) == 3, 'kernel size for ad_conv should be 3x3'
-            assert padding == dilation, 'padding for ad_conv set wrong'
-
-            shape = weights.shape
-            weights = weights.view(shape[0], shape[1], -1)
-            weights_conv = (weights - weights[:, :, [3, 0, 1, 6, 4, 2, 7, 8, 5]]).view(shape) # clock-wise
-            y = F.conv2d(x, weights_conv, bias, stride=stride, padding=padding, dilation=dilation, groups=groups)
-            return y
-        return func
+        return _apdc
     elif op_type == 'rd':
-        def func(x, weights, bias=None, stride=1, padding=0, dilation=1, groups=1):
-            assert dilation in [1, 2], 'dilation for rd_conv should be in 1 or 2'
-            assert weights.size(2) == 3 and weights.size(3) == 3, 'kernel size for rd_conv should be 3x3'
-            padding = 2 * dilation
-
-            shape = weights.shape
-            if weights.is_cuda:
-                buffer = torch.cuda.FloatTensor(shape[0], shape[1], 5 * 5).fill_(0)
-            else:
-                buffer = torch.zeros(shape[0], shape[1], 5 * 5)
-            weights = weights.view(shape[0], shape[1], -1)
-            buffer[:, :, [0, 2, 4, 10, 14, 20, 22, 24]] = weights[:, :, 1:]
-            buffer[:, :, [6, 7, 8, 11, 13, 16, 17, 18]] = -weights[:, :, 1:]
-            buffer[:, :, 12] = 0
-            buffer = buffer.view(shape[0], shape[1], 5, 5)
-            y = F.conv2d(x, buffer, bias, stride=stride, padding=padding, dilation=dilation, groups=groups)
-            return y
-        return func
+        return _rpdc
     else:
         print('impossible to be here unless you force that')
         return None
